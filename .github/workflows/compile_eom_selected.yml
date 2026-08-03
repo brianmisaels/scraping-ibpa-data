@@ -1,0 +1,38 @@
+name: Compile Selected EoM Yield Curve
+
+on:
+  schedule:
+    - cron: '30 11 1 * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  compile-eom-selected:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Install Python dependencies
+        run: |
+          pip install pandas openpyxl
+
+      - name: Run selected EoM compilation
+        run: |
+          python compile_eom_selected.py
+
+      - name: Commit output file
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git add output_eom/Selected_EoM_Yield_Curve.xlsx
+          git commit -m "Update selected EoM yield curve output" || echo "No changes to commit"
+          git push
