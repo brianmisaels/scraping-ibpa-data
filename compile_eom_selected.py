@@ -32,6 +32,8 @@ MONTH_MAP = {
     "Desember": 12,
 }
 
+MAX_TENOR = 30
+
 
 # ============================================================
 # Helper functions
@@ -62,12 +64,12 @@ def parse_indonesian_date(date_text):
     return pd.Timestamp(year=year, month=month, day=day)
 
 
-def find_selected_files():
+def find_available_files():
     """
-    Select:
-    1. Latest available date in December 2024.
-    2. Latest available date in December 2025.
-    3. Latest available date in each available month of 2026.
+    Find all available Yield-Curve files in the repository.
+
+    This version does not restrict to Dec 2024, Dec 2025, or 2026.
+    It takes all available spot rate files under Scrape PHEI.
     """
     records = []
 
@@ -85,46 +87,34 @@ def find_selected_files():
             print(f"Skip file because date cannot be parsed: {file.name}. Error: {error}")
             continue
 
-        keep_2026_monthly = file_date.year == 2026
-        keep_dec_2024_2025 = file_date.year in [2024, 2025] and file_date.month == 12
-
-        if keep_2026_monthly or keep_dec_2024_2025:
-            records.append(
-                {
-                    "file_path": file,
-                    "date": file_date,
-                    "year": file_date.year,
-                    "month": file_date.month,
-                    "file_name": file.name,
-                }
-            )
+        records.append(
+            {
+                "file_path": file,
+                "date": file_date,
+                "year": file_date.year,
+                "month": file_date.month,
+                "file_name": file.name,
+            }
+        )
 
     files_df = pd.DataFrame(records)
 
     if files_df.empty:
-        raise ValueError(
-            "No matching Yield-Curve files found for 2026 monthly or Dec 2024 / Dec 2025."
-        )
+        raise ValueError("No Yield-Curve files found under Scrape PHEI.")
 
-    selected_files = (
-        files_df
-        .sort_values("date")
-        .groupby(["year", "month"], as_index=False)
-        .tail(1)
-        .sort_values("date")
-        .reset_index(drop=True)
-    )
+    files_df = files_df.sort_values("date").reset_index(drop=True)
 
-    return selected_files
+    return files_df
 
 
-def read_and_compile_long(selected_files):
+def read_and_compile_long(files_df):
     """
-    Read selected Yield-Curve files and combine them into one long-format table.
+    Read all available Yield-Curve files and combine them into one long-format table.
+    Tenor is restricted to maximum 30.
     """
     compiled_data = []
 
-    for _, row in selected_files.iterrows():
+    for _, row in files_df.iterrows():
         source_file = row["file_path"]
         source_date = row["date"]
 
@@ -142,12 +132,19 @@ def read_and_compile_long(selected_files):
                 f"Missing required columns in {source_file}: {missing_columns}"
             )
 
+        df["Tenor Year"] = pd.to_numeric(df["Tenor Year"], errors="coerce")
+        df = df[df["Tenor Year"].notna()]
+        df = df[df["Tenor Year"] <= MAX_TENOR]
+
         df.insert(0, "Date", source_date)
         df.insert(1, "Year", int(row["year"]))
         df.insert(2, "Month", int(row["month"]))
         df["Source File"] = row["file_name"]
 
         compiled_data.append(df)
+
+    if not compiled_data:
+        raise ValueError("No usable data after tenor filtering.")
 
     final_df = pd.concat(compiled_data, ignore_index=True)
 
@@ -158,7 +155,7 @@ def make_spot_wide(final_df):
     """
     Convert long Spot-Rate data into wide format:
     rows = tenor
-    columns = selected dates
+    columns = available dates
     values = spot rates
     """
     spot_wide = (
@@ -179,8 +176,8 @@ def make_spot_wide(final_df):
 
 def get_integer_tenors(spot_wide):
     """
-    Use only integer tenors for forward rate section.
-    Example: 1, 2, 3, ..., 30.
+    Use only integer tenors for forward rate section:
+    1, 2, 3, ..., 30.
     """
     integer_tenors = []
 
@@ -188,7 +185,11 @@ def get_integer_tenors(spot_wide):
         try:
             tenor_float = float(tenor)
 
-            if tenor_float >= 1 and abs(tenor_float - round(tenor_float)) < 1e-9:
+            if (
+                tenor_float >= 1
+                and tenor_float <= MAX_TENOR
+                and abs(tenor_float - round(tenor_float)) < 1e-9
+            ):
                 integer_tenors.append(int(round(tenor_float)))
         except Exception:
             continue
@@ -198,7 +199,7 @@ def get_integer_tenors(spot_wide):
 
 def build_spot_row_map(spot_wide, spot_start_row):
     """
-    Map tenor to its Excel row in the spot rate section.
+    Map integer tenor to its Excel row in the spot rate section.
     """
     spot_row_map = {}
 
@@ -207,7 +208,10 @@ def build_spot_row_map(spot_wide, spot_start_row):
             tenor_float = float(tenor)
 
             if abs(tenor_float - round(tenor_float)) < 1e-9:
-                spot_row_map[int(round(tenor_float))] = row_idx
+                integer_tenor = int(round(tenor_float))
+
+                if integer_tenor <= MAX_TENOR:
+                    spot_row_map[integer_tenor] = row_idx
         except Exception:
             continue
 
@@ -220,9 +224,14 @@ def build_spot_row_map(spot_wide, spot_start_row):
 
 def create_idr_workbook(spot_wide):
     """
-    Create one-sheet Excel workbook with IDR format:
+    Create one-sheet Excel workbook with only IDR sheet:
     - Spot Rate (IDR)
-    - Forward Rate (IDR), using Excel formulas referencing spot rates.
+    - Forward Rate (IDR)
+
+    Forward rate formulas reference the Tenor Year column rather than hardcoded powers.
+
+    Example output formula:
+    =((1+D11)^$A11/((1+D10)^$A10))-1
     """
     wb = Workbook()
     ws = wb.active
@@ -325,8 +334,12 @@ def create_idr_workbook(spot_wide):
             else:
                 current_ref = f"{col_letter}{spot_current_row}"
                 previous_ref = f"{col_letter}{spot_previous_row}"
+                current_tenor_ref = f"$A{spot_current_row}"
+                previous_tenor_ref = f"$A{spot_previous_row}"
+
                 formula_cell.value = (
-                    f"=((1+{current_ref})^{tenor}/((1+{previous_ref})^{tenor - 1}))-1"
+                    f"=((1+{current_ref})^{current_tenor_ref}/"
+                    f"((1+{previous_ref})^{previous_tenor_ref}))-1"
                 )
 
             formula_cell.number_format = "0.0000%"
@@ -390,8 +403,8 @@ def create_idr_workbook(spot_wide):
 # ============================================================
 
 def main():
-    selected_files = find_selected_files()
-    final_df = read_and_compile_long(selected_files)
+    files_df = find_available_files()
+    final_df = read_and_compile_long(files_df)
     spot_wide = make_spot_wide(final_df)
 
     wb = create_idr_workbook(spot_wide)
