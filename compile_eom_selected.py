@@ -64,12 +64,16 @@ def parse_indonesian_date(date_text):
     return pd.Timestamp(year=year, month=month, day=day)
 
 
-def find_available_files():
+def find_month_end_files():
     """
-    Find all available Yield-Curve files in the repository.
+    Find all available Yield-Curve files, then select the latest available file
+    for each year-month combination.
 
-    This version does not restrict to Dec 2024, Dec 2025, or 2026.
-    It takes all available spot rate files under Scrape PHEI.
+    This means:
+    - If 2024 has Jan-Dec files, it will take EoM for each available month.
+    - If 2025 has Jan-Dec files, it will take EoM for each available month.
+    - If 2026 has Jan-current files, it will take EoM for each available month.
+    - If a true calendar month-end date is missing, it takes the latest available date in that month.
     """
     records = []
 
@@ -102,19 +106,27 @@ def find_available_files():
     if files_df.empty:
         raise ValueError("No Yield-Curve files found under Scrape PHEI.")
 
-    files_df = files_df.sort_values("date").reset_index(drop=True)
+    # Select latest available date per year-month
+    month_end_files = (
+        files_df
+        .sort_values("date")
+        .groupby(["year", "month"], as_index=False)
+        .tail(1)
+        .sort_values("date")
+        .reset_index(drop=True)
+    )
 
-    return files_df
+    return month_end_files
 
 
-def read_and_compile_long(files_df):
+def read_and_compile_long(month_end_files):
     """
-    Read all available Yield-Curve files and combine them into one long-format table.
-    Tenor is restricted to maximum 30.
+    Read selected month-end Yield-Curve files and combine into one long-format table.
+    Tenor is limited to MAX_TENOR.
     """
     compiled_data = []
 
-    for _, row in files_df.iterrows():
+    for _, row in month_end_files.iterrows():
         source_file = row["file_path"]
         source_date = row["date"]
 
@@ -155,7 +167,7 @@ def make_spot_wide(final_df):
     """
     Convert long Spot-Rate data into wide format:
     rows = tenor
-    columns = available dates
+    columns = selected month-end dates
     values = spot rates
     """
     spot_wide = (
@@ -176,7 +188,7 @@ def make_spot_wide(final_df):
 
 def get_integer_tenors(spot_wide):
     """
-    Use only integer tenors for forward rate section:
+    Use integer tenors only for forward rate section:
     1, 2, 3, ..., 30.
     """
     integer_tenors = []
@@ -199,7 +211,7 @@ def get_integer_tenors(spot_wide):
 
 def build_spot_row_map(spot_wide, spot_start_row):
     """
-    Map integer tenor to its Excel row in the spot rate section.
+    Map integer tenor to the corresponding Excel row in the spot rate section.
     """
     spot_row_map = {}
 
@@ -228,9 +240,8 @@ def create_idr_workbook(spot_wide):
     - Spot Rate (IDR)
     - Forward Rate (IDR)
 
-    Forward rate formulas reference the Tenor Year column rather than hardcoded powers.
-
-    Example output formula:
+    Forward rate formula uses tenor references from column A.
+    Example:
     =((1+D11)^$A11/((1+D10)^$A10))-1
     """
     wb = Workbook()
@@ -272,7 +283,12 @@ def create_idr_workbook(spot_wide):
 
     for col_idx, date_value in enumerate(date_cols, start=2):
         date_cell = ws.cell(row=spot_header_row, column=col_idx)
-        date_cell.value = date_value
+
+        if isinstance(date_value, pd.Timestamp):
+            date_cell.value = date_value.to_pydatetime()
+        else:
+            date_cell.value = date_value
+
         date_cell.number_format = "mm/dd/yyyy"
 
         ws.cell(row=spot_header_row + 1, column=col_idx).value = "Spot"
@@ -305,7 +321,12 @@ def create_idr_workbook(spot_wide):
 
     for col_idx, date_value in enumerate(date_cols, start=2):
         date_cell = ws.cell(row=forward_header_row, column=col_idx)
-        date_cell.value = date_value
+
+        if isinstance(date_value, pd.Timestamp):
+            date_cell.value = date_value.to_pydatetime()
+        else:
+            date_cell.value = date_value
+
         date_cell.number_format = "mm/dd/yyyy"
 
         ws.cell(row=forward_header_row + 1, column=col_idx).value = "Forward"
@@ -403,8 +424,8 @@ def create_idr_workbook(spot_wide):
 # ============================================================
 
 def main():
-    files_df = find_available_files()
-    final_df = read_and_compile_long(files_df)
+    month_end_files = find_month_end_files()
+    final_df = read_and_compile_long(month_end_files)
     spot_wide = make_spot_wide(final_df)
 
     wb = create_idr_workbook(spot_wide)
