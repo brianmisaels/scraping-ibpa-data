@@ -1,0 +1,121 @@
+name: Backfill August 2026 Yield Curve
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  create-august-file:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install openpyxl
+        run: |
+          python -m pip install --upgrade pip
+          pip install openpyxl
+
+      - name: Create August 2026 folder and Excel file
+        shell: bash
+        run: |
+          python <<'PY'
+          from pathlib import Path
+          from openpyxl import Workbook
+          from openpyxl.styles import Font
+
+          output_folder = Path("Scrape PHEI/2026-08-Agustus")
+          output_folder.mkdir(parents=True, exist_ok=True)
+
+          output_file = output_folder / "Yield-Curve-31-Agustus-2026.xlsx"
+
+          data = [
+              [0.1, 0.064796, 0.064796],
+              [1, 0.065736, 0.065736],
+              [2, 0.066614, 0.066643268842814907],
+              [3, 0.067368, 0.067439768965648295],
+              [4, 0.068014, 0.068137516436555856],
+              [5, 0.068566, 0.068747085851941943],
+              [6, 0.069036, 0.069277524820707527],
+              [7, 0.069433, 0.069734975941834865],
+              [8, 0.069767, 0.070127482240724825],
+              [9, 0.070046, 0.070461247852207423],
+              [10, 0.070277, 0.070741790596223542],
+              [11, 0.070468, 0.070976751237606794],
+              [12, 0.070624, 0.071170131519177],
+              [13, 0.070751, 0.071328060854861],
+              [14, 0.070855, 0.071457438155875019],
+              [15, 0.070938, 0.07155916889363767],
+              [16, 0.071005, 0.071639747039537127],
+              [17, 0.071059, 0.071702751473266879],
+              [18, 0.071102, 0.071750321256201399],
+              [19, 0.071136, 0.071784936727162166],
+              [20, 0.071163, 0.071809447133736715],
+              [21, 0.071185, 0.07182710304335901],
+              [22, 0.071202, 0.07183699352996531],
+              [23, 0.071215, 0.071840589812971844],
+              [24, 0.071225, 0.07183959582845612],
+              [25, 0.071233, 0.07183596891101951],
+              [26, 0.07124, 0.07183194376252939],
+              [27, 0.071245, 0.07182433172590041],
+              [28, 0.071249, 0.07181561460921495],
+              [29, 0.071252, 0.071805469457175697],
+              [30, 0.071254, 0.07179357211579556],
+              [31, 0.071256, 0.071783024923594674],
+              [32, 0.071257, 0.071770144167518035],
+              [33, 0.071258, 0.071758353494628668],
+              [34, 0.071259, 0.071747576064004281],
+              [35, 0.071259, 0.071733613656065565],
+              [36, 0.07126, 0.071724757845268439],
+              [37, 0.07126, 0.071712194171707822],
+              [38, 0.071261, 0.07170505543087935],
+              [39, 0.071261, 0.07169366709517444],
+              [40, 0.071261, 0.071682848288346701],
+          ]
+
+          workbook = Workbook()
+          worksheet = workbook.active
+          worksheet.title = "31-Agustus-2026"
+
+          worksheet.append(["Tenor Year", "IBPA Yield", "Spot-Rate"])
+
+          for cell in worksheet[1\]:
+              cell.font = Font(bold=True)
+
+          for row in data:
+              worksheet.append(row)
+
+          worksheet.column_dimensions["A"].width = 14
+          worksheet.column_dimensions["B"].width = 16
+          worksheet.column_dimensions["C"].width = 16
+
+          for row in range(2, worksheet.max_row + 1):
+              worksheet.cell(row=row, column=2).number_format = "0.000000%"
+              worksheet.cell(row=row, column=3).number_format = "0.000000%"
+
+          workbook.save(output_file)
+
+          print(f"Created: {output_file}")
+          PY
+
+      - name: Commit and push August file
+        run: |
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+
+          git add "Scrape PHEI/2026-08-Agustus/Yield-Curve-31-Agustus-2026.xlsx"
+
+          if git diff --cached --quiet; then
+            echo "August file already exists with identical contents."
+          else
+            git commit -m "Backfill August 2026 yield curve"
+            git push origin main
+          fi
