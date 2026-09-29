@@ -87,7 +87,7 @@ jobs:
 
           worksheet.append(["Tenor Year", "IBPA Yield", "Spot-Rate"])
 
-          for cell in worksheet[1\]:
+          for cell in worksheet[1]:
               cell.font = Font(bold=True)
 
           for row in data:
